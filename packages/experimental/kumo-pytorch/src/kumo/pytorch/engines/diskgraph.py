@@ -16,7 +16,7 @@ from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from dataclasses import replace as dataclass_replace
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 
 import numpy as np
 import torch
@@ -214,9 +214,6 @@ class DiskGraphEngine:
         seed used by ``Task.batches`` for anchor shuffling. Rebuilding an index
         can change selections because native sampling uses physical node IDs.
     :param num_shards: index shards.
-    :param ingest: ``"if_missing"`` builds the index when absent; ``"never"``
-        requires an existing one. A mismatching manifest is an error, never
-        permission to reuse.
     :param encoder_cutoffs: ``encoder_cutoff`` values whose column statistics an ingest computes.
     """
 
@@ -230,11 +227,8 @@ class DiskGraphEngine:
         num_threads: int | None = None,
         random_seed: int | None = 0,
         num_shards: int = 1,
-        ingest: Literal["if_missing", "never"] = "if_missing",
         encoder_cutoffs: Sequence[str | int | dt.datetime | dt.date | None] = (),
     ):
-        if ingest not in {"if_missing", "never"}:
-            raise ValueError("ingest must be 'if_missing' or 'never'")
         if isinstance(encoder_cutoffs, str):
             raise TypeError("encoder_cutoffs is a list of cutoffs; wrap a single one in a list")
         self._paths = managed_paths()
@@ -248,7 +242,6 @@ class DiskGraphEngine:
             raise ValueError("random_seed must be None or an unsigned 64-bit integer")
         self.random_seed = random_seed
         self.num_shards = num_shards
-        self.ingest = ingest
         self.encoder_cutoffs = tuple(
             dict.fromkeys(cutoff_nanos(value) for value in encoder_cutoffs)
         )
@@ -270,7 +263,7 @@ class DiskGraphEngine:
                 "snapshot must belong to the configured Kumo root; cross-root import is unsupported"
             )
         binding = open_index(base, snapshot_id=snapshot.id)
-        result = cls(ingest="never", num_threads=num_threads)
+        result = cls(num_threads=num_threads)
         result._paths = _ManagedIndexPaths(binding.identity, root=root)
         result.index_build_id = binding.identity
         result.index = base
@@ -478,7 +471,6 @@ class DiskGraphEngine:
             self.index,
             num_shards=self.num_shards,
             num_threads=self.num_threads,
-            if_missing=self.ingest == "if_missing",
             column_stats=(column_stats, self.encoder_cutoffs) if ingests else None,
             index_build_id=self.index_build_id,
         )
