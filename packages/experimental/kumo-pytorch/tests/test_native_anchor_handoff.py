@@ -110,7 +110,7 @@ def native_task(tmp_path, request):
         tables={"users": api.Parquet(str(users)), "events": api.Parquet(str(events))}
     )
     with api.prepare(
-        contract, dataset, api.DiskGraphEngine(index=tmp_path / "indexes" / "index", num_threads=1)
+        contract, dataset, api.DiskGraphEngine(num_threads=1)
     ) as plan:
         with plan.materialize(table, fit_split="train") as task:
             yield plan, task, table
@@ -692,7 +692,7 @@ def test_materialized_entity_fields_skip_projection_and_keep_graph_reuse(
         batch=replace(plan.contract.batch, inputs={**plan.contract.batch.inputs, "entity": entity}),
     )
     dataset = api.Dataset(tables={**plan.dataset.tables, "users": api.Parquet(str(path))})
-    engine = api.DiskGraphEngine(index=tmp_path / "indexes" / "scored-index", num_threads=1)
+    engine = api.DiskGraphEngine(num_threads=1)
     with api.prepare(contract, dataset, engine) as prepared:
         with prepared.materialize(table, fit_split="train") as task:
             native = task._anchors
