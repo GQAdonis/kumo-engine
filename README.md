@@ -73,6 +73,7 @@ The base package reads and writes local CSV and Parquet files. Optional extras a
 | `text` | Encoding for free-text columns, such as descriptions or reviews, with GloVe 6B 50d word vectors |
 | `mlflow` | MLflow run tracking and model registry |
 | `sagemaker` | SageMaker managed MLflow |
+| `fm` | (Experimental) Snapshot-backed FM payload loading through `kumo.fm` |
 
 Choose your hardware and runtime environment:
 

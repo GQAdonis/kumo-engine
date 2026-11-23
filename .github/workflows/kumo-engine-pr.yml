@@ -225,6 +225,54 @@ jobs:
           path: ${{ runner.temp }}/engine-cpu-lifecycle
           retention-days: 14
 
+  fm:
+    name: kumo-engine-pr-fm (Python ${{ matrix.python }})
+    needs: wheel
+    if: ${{ !inputs.build_only && !cancelled() && needs.wheel.result == 'success' && (github.ref != 'refs/heads/main' || github.event_name == 'workflow_dispatch') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.11', '3.14']
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with: {ref: "${{ github.sha }}", persist-credentials: false}
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with: {python-version: '${{ matrix.python }}'}
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with: {enable-cache: false}
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with: {name: 'engine-pr-wheel-${{ github.sha }}', path: '${{ runner.temp }}/fm-wheel'}
+      - name: Install the candidate with FM dependencies
+        run: |
+          set -euo pipefail
+          for name in ${!PIP_@} ${!UV_@}; do unset "$name"; done
+          wheels=("$RUNNER_TEMP"/fm-wheel/*.whl)
+          test "${#wheels[@]}" -eq 1
+          python -m venv "$RUNNER_TEMP/fm-env"
+          uv --no-config pip install --python "$RUNNER_TEMP/fm-env/bin/python" \
+            --default-index https://pypi.org/simple --torch-backend cpu \
+            "${wheels[0]}[fm]" 'pytest>=8,<10'
+          uv --no-config pip check --python "$RUNNER_TEMP/fm-env/bin/python"
+      - name: Test FM from the merged wheel outside the checkout
+        run: |
+          mkdir "$RUNNER_TEMP/fm-stage"
+          cp -R packages/experimental/kumo-fm/tests packages/experimental/kumo-fm/examples "$RUNNER_TEMP/fm-stage/"
+          cd "$RUNNER_TEMP/fm-stage"
+          ../fm-env/bin/python -I -c '
+          import importlib.util, sys
+          import kumo.engine, kumo.fm, kumo.fm._native_json, kumo.pytorch
+          for module in (kumo.engine, kumo.fm, kumo.fm._native_json, kumo.pytorch):
+              assert module.__file__.startswith(sys.prefix), module.__file__
+          assert kumo.fm.__version__ == kumo.engine.__version__
+          assert importlib.util.find_spec("duckdb") is None
+          '
+          ../fm-env/bin/python -m pytest -p no:cacheprovider -q tests
+
+
   gpu:
     name: kumo-engine-pr-gpu
     needs: wheel
@@ -278,7 +326,7 @@ jobs:
 
   required:
     name: kumo-engine-pr-ci
-    needs: [changes, wheel, cpu-lifecycle, gpu]
+    needs: [changes, wheel, cpu-lifecycle, fm, gpu]
     if: ${{ !inputs.build_only && always() && (github.ref != 'refs/heads/main' || github.event_name == 'workflow_dispatch') }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -292,6 +340,7 @@ jobs:
           WHEEL_RESULT: ${{ needs.wheel.result }}
           LIFECYCLE_RESULT: ${{ needs.cpu-lifecycle.result }}
           GPU_RESULT: ${{ needs.gpu.result }}
+          FM_RESULT: ${{ needs.fm.result }}
         run: |
           set -euo pipefail
           if [[ "$EVENT_NAME" == push ]]; then
@@ -315,8 +364,8 @@ jobs:
             exit 1
           fi
           if [[ "$WHEEL_RESULT" != success || "$LIFECYCLE_RESULT" != success ||
-                "$GPU_RESULT" != success ]]; then
-            echo "::error::GPU and CPU lifecycle tests must pass (wheel=$WHEEL_RESULT, cpu-lifecycle=$LIFECYCLE_RESULT, gpu=$GPU_RESULT)."
+                "$FM_RESULT" != success || "$GPU_RESULT" != success ]]; then
+            echo "::error::GPU, CPU lifecycle and FM tests must pass (fm=$FM_RESULT, wheel=$WHEEL_RESULT, cpu-lifecycle=$LIFECYCLE_RESULT, gpu=$GPU_RESULT)."
             exit 1
           fi
-          echo 'GPU and CPU lifecycle tests passed.'
+          echo 'GPU, CPU lifecycle and FM tests passed.'

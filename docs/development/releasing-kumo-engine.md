@@ -1,7 +1,7 @@
 # Releasing kumo-engine
 
 `kumo-engine` is published as one wheel that bundles `kumo-api`, `kumo-pql`,
-`kumo-core`, DiskGraph and every provider package (`kumo-snowflake`,
+`kumo-core`, `kumo-pytorch`, `kumo-fm`, DiskGraph and every provider package (`kumo-snowflake`,
 `kumo-databricks`, ...).
 Provider *code* ships in every install; their third-party dependencies come
 with the matching extra:
@@ -20,7 +20,12 @@ Provider code must be imported at the point of use, never at module top level,
 so a bare install can still `import kumo.engine`
 (`packages/kumo-engine/test/test_optional_imports.py` enforces this).
 
-`kumo-api`, `kumo-pql`, `kumo-core` and every provider are always bundled.
+`kumo-api`, `kumo-pql`, `kumo-core`, `kumo-pytorch`, `kumo-fm` and every provider
+are always bundled. The explicit experimental package list in the build script
+contains PyTorch and FM; other experimental packages stay excluded.
+`pip install "kumo-engine[fm]"` adds FM dependencies, including PyArrow 24,
+without DuckDB or SDM. FM's arrays encoder uses the CPython 3.11 stable ABI.
+Frozen-bundle and DuckDB benchmark tooling is not included in the wheel.
 Kumo-owned source uses Apache-2.0; bundled third-party source and native
 components retain their obligations in `THIRD-PARTY.txt`.
 `kumo-glove-6b-50d` stays a separate PyPI dependency through the `text` extra;
@@ -67,6 +72,7 @@ The root [`VERSION`](../../VERSION) file is the only place the version is
 written, and it is shared by kumo-engine, kumo-sdk, the platform, the Studio
 images and the Helm charts. `scripts/stamp_version.py` copies it into
 `kumo.engine._version` (which becomes the engine wheel's metadata version),
+`kumo.fm.__about__` (the experimental FM component version),
 `kumoai_studio/_version.py` (the SDK wheel's version), the platform's
 `common_utils/version_file.py` and the charts; CI checks they agree.
 

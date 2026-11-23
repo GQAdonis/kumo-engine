@@ -36,6 +36,7 @@ The base package reads and writes local CSV and Parquet files. Optional extras a
 | `text` | Encoding for free-text columns, such as descriptions or reviews, with GloVe 6B 50d word vectors |
 | `mlflow` | MLflow run tracking and model registry |
 | `sagemaker` | SageMaker managed MLflow |
+| `fm` | (Experimental) Snapshot-backed FM payload loading through `kumo.fm` |
 
 Kumo Engine trains on an NVIDIA GPU or an Apple silicon GPU when one is available, and on the CPU otherwise. To choose the device, pass `accelerator="gpu"`, `"mps"`, or `"cpu"` to `Trainer`.
 

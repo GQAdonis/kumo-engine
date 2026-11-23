@@ -17,8 +17,6 @@ from zipfile import ZipFile
 
 import pytest
 
-from io_utils.fsutil.api import read_text, write_text
-
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPTS = REPO_ROOT / 'packages/kumo-engine/scripts'
 SCRIPT = SCRIPTS / 'build_wheel.sh'
@@ -37,11 +35,11 @@ def test_wheel_builds_all_first_party_packages_from_monorepo(
         package = repo / 'packages' / name
         package.mkdir(parents=True)
         (package / 'pyproject.toml').touch()
-    # Experimental packages are workspace members but are not bundled, even
-    # if packages/experimental/ itself had a pyproject.toml.
-    experimental = repo / 'packages/experimental/kumo-pytorch'
-    experimental.mkdir(parents=True)
-    (experimental / 'pyproject.toml').touch()
+    # Only the explicitly released experimental packages are bundled.
+    for name in ('kumo-pytorch', 'kumo-fm', 'unreleased'):
+        experimental = repo / 'packages/experimental' / name
+        experimental.mkdir(parents=True)
+        (experimental / 'pyproject.toml').touch()
     (repo / 'packages/experimental/pyproject.toml').touch()
     diskgraph = repo / 'packages/diskgraph'
     (diskgraph / 'diskgraph-pybind').mkdir()
@@ -87,8 +85,9 @@ wheel_dir = Path(args[args.index('-w') + 1])
         'kumo-snowflake'
     ]
     assert [Path(source) for source in sources] == [
-        repo / 'packages' / name for name in sorted(expected) + ['diskgraph']
-    ]
+        repo / 'packages' / name for name in sorted(expected)
+    ] + [repo / 'packages/experimental/kumo-pytorch',
+         repo / 'packages/experimental/kumo-fm', repo / 'packages/diskgraph']
 
 
 def test_removed_component_selection_flag_is_rejected(tmp_path):
@@ -128,7 +127,7 @@ def test_macos_deployment_target_rejected_before_build(tmp_path, target):
 @pytest.mark.parametrize('host_os', ['MINGW64_NT-10.0', 'MSYS_NT-10.0'])
 def test_windows_rejects_zig(tmp_path, host_os):
     uname = tmp_path / 'uname'
-    write_text(str(uname), f'#!/bin/sh\necho {host_os}\n')
+    uname.write_text(f'#!/bin/sh\necho {host_os}\n')
     uname.chmod(0o755)
     result = subprocess.run(
         ['bash', str(SCRIPT)],
@@ -292,8 +291,8 @@ def test_engine_faiss_platform_selection_survives_merge(
         requirement for requirement in engine['requires']
         if 'extra ==' in requirement
     ]
-    project = tomllib.loads(read_text(str(
-        REPO_ROOT / 'packages/kumo-engine/pyproject.toml')))['project']
+    project = tomllib.loads((
+        REPO_ROOT / 'packages/kumo-engine/pyproject.toml').read_text())['project']
     assert not {'faiss-cpu', 'faiss-gpu', 'gpu'} & set(
         project['optional-dependencies'])
     for name in ('cpu',):
@@ -435,8 +434,8 @@ def test_glove_stays_a_pypi_dependency_of_the_text_extra(tmp_path):
 
 
 def test_plots_extra_survives_merge(tmp_path, monkeypatch):
-    project = tomllib.loads(read_text(str(
-        REPO_ROOT / 'packages/kumo-engine/pyproject.toml')))['project']
+    project = tomllib.loads((
+        REPO_ROOT / 'packages/kumo-engine/pyproject.toml').read_text())['project']
     requirements = project['optional-dependencies']['plots']
     assert requirements == ['matplotlib>=3.10.0']
     engine = COMPONENTS['kumo-engine']
@@ -694,8 +693,7 @@ def test_wheel_uses_torch_fallbacks_without_native_extensions(
     generator = repo / 'scripts/gen_third_party.py'
     generator.parent.mkdir()
     notice_suffix = '-windows' if host_os.startswith('MINGW') else ''
-    write_text(
-        str(generator),
+    generator.write_text(
         'import sys\n'
         f'assert "diskgraph-extension{notice_suffix}" in sys.argv\n'
         f'assert "diskgraph-ingest{notice_suffix}" in sys.argv\n'
@@ -803,3 +801,42 @@ for source in (args[-1:] if args[2] == 'wheel' else args[-2:]):
         assert 'Requires-Dist: torch-scatter' not in metadata
     assert next(output.glob('*.whl')).name == (
         f'kumo_engine-{version}-{native_tag}.whl')
+
+
+@pytest.mark.parametrize('tag', [
+    'cp311-abi3-manylinux_2_34_x86_64',
+    'cp312-cp312-manylinux_2_34_x86_64',
+])
+def test_fm_extra_uses_bundled_pytorch_and_stable_abi(tmp_path, monkeypatch, tag):
+    def dependencies(package):
+        project = tomllib.loads((REPO_ROOT / package / 'pyproject.toml').read_text())
+        return project['project']['dependencies']
+
+    engine = COMPONENTS['kumo-engine']
+    extra = tomllib.loads((REPO_ROOT / 'packages/kumo-engine/pyproject.toml')
+                         .read_text())['project']['optional-dependencies']['fm']
+    monkeypatch.setitem(COMPONENTS, 'kumo-engine', {
+        **engine, 'extras': [*engine['extras'], 'fm'],
+        'requires': [*engine['requires'], *(f'{r}; extra == "fm"' for r in extra)],
+    })
+    monkeypatch.setitem(COMPONENTS, 'kumo-fm', {
+        'requires': dependencies('packages/experimental/kumo-fm'),
+        'tag': tag, 'files': {'kumo/fm/_native_json.abi3.so': 'native encoder'},
+    })
+    monkeypatch.setitem(COMPONENTS, 'kumo-pytorch', {
+        'requires': dependencies('packages/experimental/kumo-pytorch'),
+    })
+    result = _merge(tmp_path, [*CORE_COMPONENTS, 'kumo-settings',
+                               'kumo-pytorch', 'kumo-fm'])
+    if 'abi3' not in tag:
+        assert result.returncode != 0
+        assert 'not py3-none-any or abi3' in result.stderr
+        return
+    assert result.returncode == 0, result.stderr
+    metadata, _, names = _read_wheel(tmp_path)
+    assert 'kumo/fm/_native_json.abi3.so' in names
+    requirements = metadata.get_all('Requires-Dist')
+    assert any('pyarrow==24.0.0' in r and 'extra == "fm"' in r for r in requirements)
+    assert not any(r.startswith(('kumo-fm', 'kumo-pytorch', 'diskgraph',
+                                 'kumo-settings', 'duckdb', 'structured-data-models'))
+                   for r in requirements)
